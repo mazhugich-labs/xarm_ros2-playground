@@ -1,0 +1,102 @@
+# Gazebo feedback through the xArm TCP emulator
+
+## Status ownership
+
+- This file is the working plan for connecting MoveIt's real-driver path to an xArm simulated in Gazebo.
+- Only the user may check an item, mark a phase complete, or declare the overall task complete.
+- Agents must leave all checkboxes unchanged unless the user explicitly asks to update them.
+- An implementation note or passing test is evidence for the user; it is not permission to check an item.
+
+## Non-negotiable constraints
+
+- Do not modify `xarm_ros2` or any nested submodule.
+- Put all new ROS packages and emulator changes under `ros2_ws/src`.
+- When creating or entering a new worktree, run `git submodule update --init --recursive` before building.
+- Gazebo is the source of measured joint feedback. Commanded positions must not be reported as measured positions until Gazebo publishes them.
+- Retain the real MoveIt/controller path through `uf_robot_hardware/UFRobotSystemHardware` and the xArm SDK.
+- Use a separate Gazebo controller manager under `/sim/controller_manager`.
+- Do not start a second MoveIt instance or a second root trajectory controller.
+
+## Intended data flow
+
+```text
+MoveIt
+  -> /controller_manager/xarm7_traj_controller
+  -> UFRobotSystemHardware and xArm SDK
+  -> xArm TCP emulator
+  -> /sim/joint_position_controller/commands
+  -> Gazebo joints
+  -> /sim/joint_state_broadcaster/joint_states
+  -> xArm TCP emulator
+  -> xArm SDK and driver joint states
+  -> MoveIt
+```
+
+## Work plan
+
+- [ ] 1. Add the simulation controller dependency to the Docker image.
+  - Install `ros-${ROS_DISTRO}-forward-command-controller` in the existing apt layer.
+  - Build the complete image and confirm ROS resolves `forward_command_controller`.
+  - Current evidence: implemented in commit `ae6ff14`; image build and all 13 upstream xArm package builds passed. This remains unchecked pending user review.
+
+- [ ] 2. Create a standalone bringup package outside `xarm_ros2`.
+  - Suggested package: `ros2_ws/src/xarm_gazebo_driver_bringup`.
+  - Add package metadata, launch files, simulation controller YAML, and a wrapper Xacro.
+  - Reuse installed resources from `xarm_description`, `xarm_gazebo`, and `xarm_moveit_config` without copying or editing the submodule.
+
+- [ ] 3. Define the Gazebo robot description and namespace boundaries.
+  - Instantiate the upstream `xarm_device` macro for xArm7 with `gazebo_ros2_control/GazeboSystem`.
+  - Configure the Gazebo plugin explicitly with namespace `/sim`.
+  - Set `robot_param_node` to `/sim/robot_state_publisher`.
+  - Keep simulation robot description, joint-state topics, and TF separate from the global real-driver/MoveIt graph.
+  - Ensure the simulated and real descriptions use identical joint names, prefix, attachments, and mounting pose.
+
+- [ ] 4. Configure the Gazebo controller manager.
+  - Configure `/sim/controller_manager` with `use_sim_time: true`.
+  - Load `joint_state_broadcaster/JointStateBroadcaster` with `use_local_topics: true`.
+  - Load `forward_command_controller/ForwardCommandController` for the position interfaces of `joint1` through `joint7`.
+  - Use `/sim/joint_position_controller/commands` for targets.
+  - Use `/sim/joint_state_broadcaster/joint_states` for measured feedback.
+  - Do not load a Gazebo joint trajectory controller for this architecture.
+
+- [ ] 5. Add an optional Gazebo backend to `xarm_controller_emulator`.
+  - Preserve the current instantaneous backend for existing tests and use cases.
+  - Store commanded targets separately from measured robot state.
+  - Publish accepted ServoJ targets to the Gazebo forward controller.
+  - Subscribe to Gazebo joint states and map positions by joint name into the seven protocol slots, in radians.
+  - Source `GET_JOINT_POS` responses and normal/rich TCP reports exclusively from measured Gazebo positions.
+  - Do not wait synchronously for Gazebo while holding TCP or robot-state locks.
+  - Initially reject or explicitly leave unsupported any motion command whose Gazebo behavior has not been defined; real ros2_control writes require ServoJ first.
+
+- [ ] 6. Define readiness, stale-feedback, stop, and fault behavior.
+  - Do not report the emulator ready until one complete valid Gazebo joint-state sample has arrived.
+  - Measure feedback age with a monotonic receive clock rather than comparing ROS wall time with simulation time.
+  - Treat paused or lost Gazebo feedback as stale and prevent false trajectory success.
+  - On stop, disable, C54, or stale feedback, hold the latest measured position and prevent queued targets from resuming on recovery.
+  - Do not use command silence as the feedback watchdog: the xArm hardware plugin may omit repeated unchanged targets.
+
+- [ ] 7. Add one launch path that starts the simulation side in dependency order.
+  - Start Gazebo Classic and `/sim/robot_state_publisher`.
+  - Spawn the xArm entity.
+  - Wait for `/sim/controller_manager`, then spawn the broadcaster and position controller.
+  - Start the emulator Gazebo backend only after its ROS interfaces are available.
+  - Make readiness observable so the real-driver launch is not started against incomplete simulation feedback.
+
+- [ ] 8. Connect the existing real MoveIt launch to the emulator.
+  - Start the existing xArm7 real-move launch with `robot_ip:=127.0.0.1` after emulator readiness.
+  - Let the real hardware plugin initialize its embedded driver; do not launch another xArm driver.
+  - Keep the real-driver and MoveIt stack on wall time for the first integration while Gazebo uses simulation time.
+  - Run Gazebo near real time and make pause behavior explicit in emulator readiness/fault handling.
+
+- [ ] 9. Validate the complete command and feedback loop.
+  - Confirm exactly two controller managers: root real hardware and `/sim` Gazebo hardware.
+  - Confirm controller states and claimed interfaces do not overlap.
+  - Execute a small MoveIt trajectory and compare Gazebo state, emulator protocol state, driver joint state, and MoveIt execution result.
+  - Verify a target is never reported as achieved before Gazebo reaches it.
+  - Pause Gazebo during motion and verify feedback stops advancing and execution cannot falsely succeed.
+  - Exercise C54, stop/enable recovery, stale-feedback recovery, emulator restart, and Gazebo restart.
+  - Run existing emulator tests and the xArm ROS 2 driver/MoveIt integration tests.
+
+## Scope note
+
+The first integration validates the real-driver protocol and feedback loop using Gazebo position control. The existing zero-gravity world and position interface do not validate motor torque, gravity compensation, or physical fidelity. Those require a separately approved follow-up task.
