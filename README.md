@@ -7,6 +7,8 @@
 ### 2.1. Клонирование репозитория
 ```bash
 git clone --recursive https://github.com/mazhugich-labs/xarm_ros2-playground.git
+git submodule update --init --recursive
+git pull --recurse-submodules
 ```
 
 ### 2.2. docker build
