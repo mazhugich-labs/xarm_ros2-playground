@@ -13,16 +13,20 @@ git pull --recurse-submodules
 
 ### 2.2. docker build
 ```bash
+./docker.sh build
 ```
 
 ### 2.3. docker run
 ```bash
+./docker.sh run
 ```
 
-### 2.4. docker exec
+### 2.4. docker enter
 ```bash
+./docker.sh enter
 ```
 
 ### 2.5. docker stop
 ```bash
+./docker.sh stop
 ```
