@@ -1,468 +1,174 @@
+"""Implement the supported subset of xArm private Modbus-TCP commands."""
+
+import logging
+import math
 import socket
 import struct
 import threading
-import logging
 
-logging.basicConfig(
-    level=logging.INFO, format="[%(levelname)s] [%(name)s]: %(message)s"
-)
 _logger = logging.getLogger(__name__)
-_logger.setLevel(logging.INFO)
 
 GET_VERSION = 0x01
-
 MOTION_EN = 0x0B
 SET_STATE = 0x0C
 GET_STATE = 0x0D
 GET_CMDNUM = 0x0E
 GET_ERROR = 0x0F
-SET_MODE = 0x13
-
-GET_TCP_POSE = 0x29
-GET_JOINT_POS = 0x2A
-
-SERVO_DBMSG = 0x6A
-
-GET_JOINT_POS = 0x2A
-
-MOVE_JOINT = 0x17
-MOVE_SERVOJ = 0x1D
-
 CLEAN_ERR = 0x10
 CLEAN_WARN = 0x11
+SET_MODE = 0x13
+MOVE_JOINT = 0x17
+MOVE_SERVOJ = 0x1D
+GET_TCP_POSE = 0x29
+GET_JOINT_POS = 0x2A
+SERVO_DBMSG = 0x6A
+
+# Validate the whole request before mutating controller state.
+_PARAMETER_LENGTHS = {
+    GET_VERSION: (0,), MOTION_EN: (2,), SET_STATE: (1,), GET_STATE: (0,),
+    GET_CMDNUM: (0,), GET_ERROR: (0,), CLEAN_ERR: (0,), CLEAN_WARN: (0,),
+    SET_MODE: (1,), MOVE_JOINT: (40, 41), MOVE_SERVOJ: (40,),
+    GET_TCP_POSE: (0,), GET_JOINT_POS: (0,), SERVO_DBMSG: (0,),
+}
 
 
 class ControlServer:
-    def __init__(
-        self,
-        state,
-        host="127.0.0.1",
-        port=502,
-    ):
+    """Serve control requests with atomic state updates and response snapshots."""
+
+    def __init__(self, state, host='127.0.0.1', port=502):
+        """Configure the control endpoint."""
         self.state = state
         self.host = host
         self.port = port
 
     def start(self):
-        thread = threading.Thread(
-            target=self._run,
-            daemon=True,
-        )
-        thread.start()
+        """Start accepting connections in a background thread."""
+        threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        sock = socket.socket(
-            socket.AF_INET,
-            socket.SOCK_STREAM,
-        )
-
-        sock.setsockopt(
-            socket.SOL_SOCKET,
-            socket.SO_REUSEADDR,
-            1,
-        )
-
-        sock.bind((self.host, self.port))
-        sock.listen(5)
-
-        _logger.info(f"listening on " f"{self.host}:{self.port}")
-
-        while True:
-            conn, addr = sock.accept()
-
-            _logger.info(f"connection from {addr}")
-
-            threading.Thread(
-                target=self._client,
-                args=(conn,),
-                daemon=True,
-            ).start()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((self.host, self.port))
+            sock.listen(5)
+            _logger.info('Control listening on %s:%s', self.host, self.port)
+            while True:
+                conn, _ = sock.accept()
+                threading.Thread(
+                    target=self._client, args=(conn,), daemon=True).start()
 
     def _client(self, conn):
         with conn:
-            while True:
-                header = self._recv_exact(conn, 6)
-
-                if header is None:
-                    _logger.info("disconnected")
-                    return
-
-                transaction_id, protocol_id, length = struct.unpack(">HHH", header)
-
-                body = self._recv_exact(conn, length)
-
-                if body is None:
-                    return
-
-                command = body[0]
-                params = body[1:]
-
-                _logger.debug(
-                    f"tid={transaction_id} \
-                    proto=0x{protocol_id:04X} \
-                    len={length} \
-                    reg=0x{command:02X} \
-                    data={params.hex(' ')}",
-                )
-
-                response = self._handle_request(
-                    command,
-                    params,
-                )
-
-                if response is None:
-                    # xArm private protocol:
-                    # bit 3 means invalid.
-                    self._send_response(
-                        conn,
-                        transaction_id,
-                        protocol_id,
-                        command,
-                        status=0x08,
-                    )
-
-                    _logger.warning(f"UNIMPLEMENTED reg=0x{command:02X}")
-
-                else:
-                    self._send_response(
-                        conn,
-                        transaction_id,
-                        protocol_id,
-                        command,
-                        payload=response,
-                    )
+            try:
+                while True:
+                    header = self._recv_exact(conn, 6)
+                    if header is None:
+                        return
+                    transaction_id, protocol_id, length = struct.unpack('>HHH', header)
+                    # There is no register to echo for an empty frame. Unsupported
+                    # protocols cannot safely be interpreted as private commands.
+                    # SDK firmware >= 1.8.6 uses ID 3 for heartbeat-enabled
+                    # private control; command/response framing is unchanged.
+                    if protocol_id not in (2, 3) or length < 1:
+                        return
+                    body = self._recv_exact(conn, length)
+                    if body is None:
+                        return
+                    status, payload = self._handle_request(body[0], body[1:])
+                    frame = struct.pack(
+                        '>HHHBB', transaction_id, protocol_id,
+                        len(payload) + 2, body[0], status)
+                    conn.sendall(frame + payload)
+            except OSError as exc:
+                _logger.debug('Control connection closed: %s', exc)
 
     def _handle_request(self, command, params):
-        if command == CLEAN_ERR:
-            with self.state.lock:
+        with self.state.lock:
+            if len(params) not in _PARAMETER_LENGTHS.get(command, ()):
+                return self._reply(extra_status=0x08)
+            return self._dispatch(command, params)
 
-                if self.state.error_code == 54 and self.state.c54_active:
-                    _logger.warning(
-                        "[control] CLEAN_ERR rejected: C54 condition still active"
-                    )
+    def _reply(self, payload=b'', extra_status=0):
+        # Capture the status under the same lock as the command's payload.
+        return self.state.response_status | extra_status, payload
 
-                    # Keep C54 latched.
-                    #
-                    # We still return protocol success because
-                    # the command itself was accepted; the next
-                    # report/GET_ERROR shows that C54 remains.
-                    return b""
-
-                old_error = self.state.error_code
-                self.state.error_code = 0
-
-                _logger.info(f"[control] CLEAN_ERR {old_error} -> 0")
-
-            return b""
-
-        if command == CLEAN_WARN:
-            _logger.info("CLEAN_WARN -> 0")
-            self.state.warn_code = 0
-            return b""
-
-        if command == MOVE_SERVOJ:
-            # SDK sends exactly 10 float32 values:
-            #
-            # 0..6 = joint target positions
-            # 7    = speed       (reserved for servoj)
-            # 8    = acceleration (reserved)
-            # 9    = mvtime       (reserved)
-
-            if len(params) != 40:
-                _logger.warning(f"MOVE_SERVOJ invalid payload length: {len(params)}")
-                return None
-
-            values = struct.unpack(">10f", params)
-
-            target_angles = list(values[:7])
-            speed = values[7]
-            acceleration = values[8]
-            mvtime = values[9]
-
-            # For the initial emulator, treat ServoJ as instantaneous.
-            #
-            # xArm protocol always carries 7 slots, even for xArm6/xArm5.
-            for i in range(7):
-                if i < self.state.dof:
-                    self.state.joint_angles[i] = target_angles[i]
-                else:
-                    self.state.joint_angles[i] = 0.0
-
-            # Do NOT log every ServoJ packet once things work.
-            # During trajectory execution this can be high frequency.
-            #
-            _logger.debug(f"MOVE_SERVOJ {target_angles}")
-
-            return b""
-
-        if command == MOVE_JOINT:
-            # 10 float32 values:
-            #
-            # 0..6 = joint targets
-            # 7    = speed
-            # 8    = acceleration
-            # 9    = mvtime
-            #
-            # Optional byte 40 = only_check_type
-
-            if len(params) not in (40, 41):
-                _logger.warning(f"MOVE_JOINT invalid payload length: {len(params)}")
-                return None
-
-            values = struct.unpack(
-                ">10f",
-                params[:40],
-            )
-
-            target_angles = list(values[:7])
-            speed = values[7]
-            acceleration = values[8]
-            mvtime = values[9]
-
-            only_check_type = params[40] if len(params) == 41 else 0
-
-            _logger.debug(f"MOVE_JOINT \
-                angles={target_angles} \
-                speed={speed:.4f} \
-                acc={acceleration:.4f} \
-                mvtime={mvtime:.4f} \
-                only_check={only_check_type}")
-
-            # Initial emulator behaviour:
-            # move instantaneously to the requested position.
-            for i in range(7):
-                if i < self.state.dof:
-                    self.state.joint_angles[i] = target_angles[i]
-                else:
-                    self.state.joint_angles[i] = 0.0
-
-            # If only_check_type is enabled, the SDK expects
-            # three response bytes and examines byte 2 as
-            # only_check_result.
-            if only_check_type > 0:
-                return bytes(
-                    [
-                        0,
-                        0,
-                        0,  # only_check_result = OK
-                    ]
-                )
-
-            return b""
-
-        if command == GET_JOINT_POS:
-            payload = struct.pack(
-                ">7f",
-                *self.state.joint_angles,
-            )
-
-            _logger.debug(f"GET_JOINT_POS -> {self.state.joint_angles}")
-
-            return payload
-
-        # --------------------------------------------------
-        # GET_VERSION
-        # --------------------------------------------------
-
+    def _dispatch(self, command, params):
+        state = self.state
         if command == GET_VERSION:
-            _logger.info(f"GET_VERSION -> {self.state.firmware_version}")
-
-            return self.state.firmware_version.encode("ascii")
-
-        # --------------------------------------------------
-        # GET_ERROR
-        #
-        # response:
-        #   byte 0 error
-        #   byte 1 warning
-        # --------------------------------------------------
-
-        if command == GET_ERROR:
-            _logger.info(
-                f"GET_ERROR -> error={self.state.error_code} warn={self.state.warn_code}"
-            )
-
-            return bytes(
-                [
-                    self.state.error_code,
-                    self.state.warn_code,
-                ]
-            )
-
-        # --------------------------------------------------
-        # SERVO_DBMSG
-        #
-        # 16 bytes = status/error pairs
-        # for 8 servo slots.
-        #
-        # All zero means no servo faults.
-        # --------------------------------------------------
-
-        if command == SERVO_DBMSG:
-            _logger.info(f"SERVO_DBMSG -> 0 (no servo faults)")
-
-            return bytes(16)
-
-        # --------------------------------------------------
-        # GET_STATE
-        # --------------------------------------------------
+            return self._reply(state.firmware_version.encode('ascii'))
         if command == GET_STATE:
-            _logger.info(f"GET_STATE -> {self.state.state}")
-
-            return bytes([self.state.state & 0xFF])
-
-        # --------------------------------------------------
-        # GET_CMDNUM
-        # --------------------------------------------------
+            return self._reply(bytes([state.state]))
         if command == GET_CMDNUM:
-            _logger.info(f"GET_CMDNUM -> {self.state.cmdnum}")
-            return struct.pack(
-                ">H",
-                self.state.cmdnum,
-            )
-
-        # --------------------------------------------------
-        # MOTION_EN
-        #
-        # params:
-        #   byte 0: servo id
-        #   byte 1: enable
-        #
-        # servo id:
-        #   1..7 = individual joint
-        #   8    = all joints
-        # --------------------------------------------------
-        if command == MOTION_EN:
-            if len(params) < 2:
-                _logger.warning("MOTION_EN invalid payload")
-                return None
-
-            servo_id = params[0]
-            enable = params[1] != 0
-
-            if servo_id == 8:
-                mask = (1 << self.state.dof) - 1
-
-                self.state.servo_enable = mask if enable else 0
-
-            elif 1 <= servo_id <= self.state.dof:
-                bit = 1 << (servo_id - 1)
-
-                if enable:
-                    self.state.servo_enable |= bit
-                else:
-                    self.state.servo_enable &= ~bit
-
-            else:
-                _logger.warning(f" invalid servo id: {servo_id}")
-                return None
-
-            _logger.info(
-                f"MOTION_EN id={servo_id} enable={enable} mask=0x{self.state.servo_enable:02X}"
-            )
-
-            return b""
-
-        # --------------------------------------------------
-        # GET_TCP_POSE
-        # --------------------------------------------------
-
+            return self._reply(struct.pack('>H', state.cmdnum))
+        if command == GET_ERROR:
+            return self._reply(bytes([state.error_code, state.warn_code]))
         if command == GET_TCP_POSE:
-            return struct.pack(
-                ">6f",
-                *self.state.tcp_pose,
-            )
-
-        # --------------------------------------------------
-        # GET_JOINT_POS
-        # --------------------------------------------------
-
+            return self._reply(struct.pack('<6f', *state.tcp_pose))
         if command == GET_JOINT_POS:
-            return struct.pack(
-                ">7f",
-                *self.state.joint_angles,
-            )
-
-        # --------------------------------------------------
-        # SET_STATE
-        #
-        # Important values:
-        #   0 = motion/ready
-        #   3 = pause
-        #   4 = stop
-        # --------------------------------------------------
-        if command == SET_STATE:
-            if len(params) < 1:
-                _logger.warning("SET_STATE invalid payload")
-                return None
-
-            new_state = params[0]
-
-            self.state.state = new_state
-
-            _logger.info(f"SET_STATE -> {new_state}")
-
-            return b""
-
-        # --------------------------------------------------
-        # SET_MODE
-        #
-        # Important values:
-        #   0 = position
-        #   1 = servo motion
-        #   2 = joint teaching
-        #   4 = joint velocity
-        #   5 = cartesian velocity
-        # --------------------------------------------------
-        if command == SET_MODE:
-            if len(params) < 1:
-                _logger.warning("SET_MODE invalid payload")
-                return None
-
-            new_mode = params[0]
-
-            self.state.mode = new_mode
-
-            _logger.info(f"SET_MODE -> {new_mode}")
-
-            return b""
-
-        return None
-
-    @staticmethod
-    def _send_response(
-        conn,
-        transaction_id,
-        protocol_id,
-        command,
-        payload=b"",
-        status=0,
-    ):
-        length = 2 + len(payload)
-
-        frame = struct.pack(
-            ">HHHBB",
-            transaction_id,
-            protocol_id,
-            length,
-            command,
-            status,
-        )
-
-        frame += payload
-
-        conn.sendall(frame)
+            return self._reply(struct.pack('<7f', *state.joint_angles))
+        if command == SERVO_DBMSG:
+            return self._reply(bytes(16))
+        if command == CLEAN_WARN:
+            state.warn_code = 0
+        elif command == CLEAN_ERR:
+            if not state.c54_active:
+                state.error_code = 0
+            state.reset()
+        elif command == MOTION_EN:
+            servo_id, enable = params
+            if enable not in (0, 1) or servo_id not in (*range(1, state.dof + 1), 8):
+                return self._reply(extra_status=0x08)
+            mask = state.joint_mask if servo_id == 8 else 1 << (servo_id - 1)
+            if enable:
+                state.servo_enable |= mask
+            else:
+                state.servo_enable &= ~mask
+            state.reset()
+        elif command == SET_STATE:
+            requested = params[0]
+            if requested not in (0, 3, 4):
+                return self._reply(extra_status=0x08)
+            if requested == 0:
+                if (state.error_code or state.c54_active
+                        or state.servo_enable != state.joint_mask):
+                    return self._reply(extra_status=0x10)
+                state.state = 2
+            else:
+                state.state = requested
+                if requested == 4:
+                    state.cmdnum = 0
+        elif command == SET_MODE:
+            # Only the advertised position, servo, and joint teaching modes
+            # are supported; there are no velocity-mode handlers in this emulator.
+            if params[0] not in (0, 1, 2):
+                return self._reply(extra_status=0x08)
+            state.mode = params[0]
+            state.reset()
+        elif command in (MOVE_JOINT, MOVE_SERVOJ):
+            values = struct.unpack('<10f', params[:40])
+            if not all(math.isfinite(value) for value in values):
+                return self._reply(extra_status=0x08)
+            if len(params) == 41 and params[40] != 0:
+                # No collision/limit planner: never claim a check succeeded.
+                return self._reply(extra_status=0x08)
+            if command == MOVE_JOINT and (values[7] < 0 or values[8] < 0):
+                return self._reply(extra_status=0x08)
+            required_mode = 0 if command == MOVE_JOINT else 1
+            if not state.motion_ready or state.mode != required_mode:
+                return self._reply(extra_status=0x10)
+            state.joint_angles[:] = list(values[:state.dof]) + [0.0] * (7 - state.dof)
+            # Motion completes immediately; there is no queued command left.
+            state.state = 2
+            state.cmdnum = 0
+            if command == MOVE_JOINT:
+                return self._reply(struct.pack('>H', state.cmdnum))
+        return self._reply()
 
     @staticmethod
     def _recv_exact(conn, count):
         buf = bytearray()
-
         while len(buf) < count:
             part = conn.recv(count - len(buf))
-
             if not part:
                 return None
-
             buf.extend(part)
-
         return bytes(buf)

@@ -1,4 +1,9 @@
+"""Start the TCP controller, reporting endpoints, and ROS fault service."""
+
+import logging
+
 import rclpy
+from rclpy.executors import ExternalShutdownException
 
 from .state import RobotState
 from .control_server import ControlServer
@@ -11,6 +16,8 @@ from .emulator_node import XArmEmulatorNode
 
 
 def main(args=None):
+    """Run the emulator until ROS shuts down."""
+    logging.basicConfig(level=logging.INFO)
     rclpy.init(args=args)
 
     state = RobotState(
@@ -48,12 +55,12 @@ def main(args=None):
     try:
         rclpy.spin(node)
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
 
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
