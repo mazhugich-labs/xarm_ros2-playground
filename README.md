@@ -19,7 +19,7 @@ git pull --recurse-submodules
 ```bash
 ```
 
-### 2.4. docker enter
+### 2.4. docker exec
 ```bash
 ```
 
