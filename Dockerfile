@@ -8,6 +8,7 @@ COPY xarm_ros2 /opt/xarm_ros2_ws/src/xarm_ros2
 RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
     && rosdep update \
     && apt-get update \
+    && apt-get install -y --no-install-recommends "ros-${ROS_DISTRO}-forward-command-controller" \
     && rosdep install --from-paths src --ignore-src --rosdistro "${ROS_DISTRO}" -y \
     && rm -rf /var/lib/apt/lists/*
 
