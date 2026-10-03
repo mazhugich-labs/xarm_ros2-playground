@@ -131,6 +131,69 @@ def test_standalone_xarm_driver(emulator, node, tmp_path, report_type):
         node.destroy_subscription(subscription)
 
 
+def test_driver_c54_blocks_motion_and_recovers(emulator, node, tmp_path):
+    """Inject C54 through ROS and recover through the actual driver and SDK."""
+    from std_srvs.srv import SetBool
+    from xarm_msgs.msg import RobotMsg
+    from xarm_msgs.srv import Call, GetFloat32List, MoveJoint, SetInt16, SetInt16ById
+
+    with running([
+        'ros2', 'launch', 'xarm_api', 'xarm7_driver.launch.py',
+        'robot_ip:=127.0.0.1',
+    ], tmp_path / 'c54_driver.log') as driver:
+        reports = []
+        subscription = node.create_subscription(
+            RobotMsg, '/xarm/robot_states', reports.append, 10)
+
+        def invoke(service_type, name, **fields):
+            client = node.create_client(service_type, name)
+            try:
+                assert client.wait_for_service(timeout_sec=15), name
+                return result(node, client.call_async(service_type.Request(**fields)))
+            finally:
+                node.destroy_client(client)
+
+        def angle():
+            reply = invoke(GetFloat32List, '/xarm/get_servo_angle')
+            assert reply.ret == 0
+            return reply.datas[0]
+
+        def ready():
+            assert invoke(SetInt16ById, '/xarm/motion_enable', id=8, data=1).ret == 0
+            assert invoke(SetInt16, '/xarm/set_mode', data=1).ret == 0
+            assert invoke(SetInt16, '/xarm/set_state', data=0).ret == 0
+            wait_until(node, lambda: reports and reports[-1].err == 0
+                       and reports[-1].mode == 1 and reports[-1].state in (1, 2))
+
+        def move(target):
+            return invoke(MoveJoint, '/xarm/set_servo_angle_j',
+                          angles=[target] + [0.0] * 6).ret
+
+        ready()
+        assert move(0.1) == 0
+        assert abs(angle() - 0.1) < 0.001
+        assert invoke(SetBool, '/xarm_controller_emulator/set_c54', data=True).success
+        wait_until(node, lambda: reports[-1].err == 54 and reports[-1].state == 4)
+        assert move(0.2) != 0
+        assert abs(angle() - 0.1) < 0.001
+        assert invoke(Call, '/xarm/clean_error').ret != 0
+        assert invoke(SetBool, '/xarm_controller_emulator/set_c54', data=False).success
+        count = len(reports)
+        wait_until(node, lambda: len(reports) >= count + 2)
+        assert reports[-1].err == 54  # Releasing the cause does not clear the latch.
+        assert invoke(Call, '/xarm/clean_error').ret == 0
+        wait_until(node, lambda: reports[-1].err == 0)
+        assert reports[-1].state == 5  # CLEAN_ERR resets readiness (configuration changed).
+        assert move(0.2) != 0  # Clearing alone must not restore motion readiness.
+        ready()
+        assert abs(angle() - 0.1) < 0.001  # Rejected targets never replay on recovery.
+        assert move(-0.1) == 0
+        assert abs(angle() + 0.1) < 0.001
+        assert driver.poll() is None
+        assert emulator.poll() is None
+        node.destroy_subscription(subscription)
+
+
 def test_moveit_plans_and_executes_on_real_hardware_plugin(emulator, node, tmp_path):
     """Execute MoveGroup goals through ros2_control, the SDK, and the emulator."""
     from controller_manager_msgs.srv import ListControllers

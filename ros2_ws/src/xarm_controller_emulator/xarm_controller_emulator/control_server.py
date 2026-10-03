@@ -42,14 +42,19 @@ class ControlServer:
         self.port = port
 
     def start(self):
-        """Start accepting connections in a background thread."""
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        """Bind synchronously so startup cannot hide an unavailable TCP endpoint."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((self.host, self.port))
             sock.listen(5)
+            threading.Thread(target=self._run, args=(sock,), daemon=True).start()
+        except Exception:
+            sock.close()
+            raise
+
+    def _run(self, sock):
+        with sock:
             _logger.info('Control listening on %s:%s', self.host, self.port)
             while True:
                 conn, _ = sock.accept()
@@ -83,6 +88,7 @@ class ControlServer:
 
     def _handle_request(self, command, params):
         with self.state.lock:
+            self.state.check_feedback()
             if len(params) not in _PARAMETER_LENGTHS.get(command, ()):
                 return self._reply(extra_status=0x08)
             return self._dispatch(command, params)
@@ -129,11 +135,13 @@ class ControlServer:
                 return self._reply(extra_status=0x08)
             if requested == 0:
                 if (state.error_code or state.c54_active
+                        or not state.feedback_fresh
                         or state.servo_enable != state.joint_mask):
                     return self._reply(extra_status=0x10)
                 state.state = 2
             else:
                 state.state = requested
+                state.hold()
                 if requested == 4:
                     state.cmdnum = 0
         elif command == SET_MODE:
@@ -144,6 +152,9 @@ class ControlServer:
             state.mode = params[0]
             state.reset()
         elif command in (MOVE_JOINT, MOVE_SERVOJ):
+            if state.external_feedback and command == MOVE_JOINT:
+                # Gazebo currently supports streamed ServoJ, not joint planning.
+                return self._reply(extra_status=0x08)
             values = struct.unpack('<10f', params[:40])
             if not all(math.isfinite(value) for value in values):
                 return self._reply(extra_status=0x08)
@@ -155,9 +166,12 @@ class ControlServer:
             required_mode = 0 if command == MOVE_JOINT else 1
             if not state.motion_ready or state.mode != required_mode:
                 return self._reply(extra_status=0x10)
-            state.joint_angles[:] = list(values[:state.dof]) + [0.0] * (7 - state.dof)
-            # Motion completes immediately; there is no queued command left.
-            state.state = 2
+            state.joint_targets[:] = list(values[:state.dof]) + [0.0] * (7 - state.dof)
+            if state.external_feedback:
+                state.state = 1
+            else:
+                state.joint_angles[:] = state.joint_targets
+                state.state = 2
             state.cmdnum = 0
             if command == MOVE_JOINT:
                 return self._reply(struct.pack('>H', state.cmdnum))

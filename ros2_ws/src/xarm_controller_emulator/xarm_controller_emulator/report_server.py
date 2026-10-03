@@ -31,6 +31,7 @@ def _fill_common_report(buf, state):
 def build_normal_report(state):
     """Take an atomic snapshot of the 145-byte normal report."""
     with state.lock:
+        state.check_feedback()
         buf = bytearray(NORMAL_REPORT_SIZE)
         _fill_common_report(buf, state)
         return bytes(buf)
@@ -39,6 +40,7 @@ def build_normal_report(state):
 def build_rich_report(state):
     """Take an atomic snapshot of the SDK-compatible 245-byte rich report."""
     with state.lock:
+        state.check_feedback()
         buf = bytearray(RICH_REPORT_SIZE)
         _fill_common_report(buf, state)
         struct.pack_into('6B', buf, 145, state.dof, state.dof, 0xAA, 0x55, 0, 0)
@@ -62,14 +64,19 @@ class ReportServer:
         self.name = name
 
     def start(self):
-        """Start accepting report subscribers in a background thread."""
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        """Bind synchronously so a reporting-port conflict fails startup."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((self.host, self.port))
             sock.listen(5)
+            threading.Thread(target=self._run, args=(sock,), daemon=True).start()
+        except Exception:
+            sock.close()
+            raise
+
+    def _run(self, sock):
+        with sock:
             _logger.info('Report %s listening on %s:%s', self.name, self.host, self.port)
             while True:
                 conn, _ = sock.accept()

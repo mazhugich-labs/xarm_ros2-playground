@@ -46,13 +46,13 @@ def main(args=None):
         name="rich",
     )
 
-    control.start()
-    normal_report.start()
-    rich_report.start()
-
+    # Configure feedback readiness before any TCP endpoint accepts clients.
     node = XArmEmulatorNode(state)
 
     try:
+        control.start()
+        normal_report.start()
+        rich_report.start()
         rclpy.spin(node)
 
     except (KeyboardInterrupt, ExternalShutdownException):
