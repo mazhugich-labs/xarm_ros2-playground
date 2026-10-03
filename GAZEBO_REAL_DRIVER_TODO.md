@@ -3,9 +3,10 @@
 ## Status ownership
 
 - This file is the working plan for connecting MoveIt's real-driver path to an xArm simulated in Gazebo.
-- Only the user may check an item, mark a phase complete, or declare the overall task complete.
-- Agents must leave all checkboxes unchanged unless the user explicitly asks to update them.
-- An implementation note or passing test is evidence for the user; it is not permission to check an item.
+- The user has authorized agents to mark implemented tasks complete after the relevant tests pass.
+- For changes that interact with `xarm_ros2`, run integration tests against its actual packages before marking the affected task complete.
+- Record test evidence and its limits; do not treat tests of the instantaneous emulator as validation of the future Gazebo backend.
+- C54 injection and recovery are required acceptance cases for the emulator/driver/Gazebo integration. The overall task remains open until all required work and tests pass.
 
 ## Non-negotiable constraints
 
@@ -21,7 +22,7 @@
 
 ```text
 MoveIt
-  -> /controller_manager/xarm7_traj_controller
+  -> /xarm7_traj_controller (managed by /controller_manager)
   -> UFRobotSystemHardware and xArm SDK
   -> xArm TCP emulator
   -> /sim/joint_position_controller/commands
@@ -34,30 +35,31 @@ MoveIt
 
 ## Work plan
 
-- [ ] 1. Add the simulation controller dependency to the Docker image.
+- [x] 1. Add the simulation controller dependency to the Docker image.
   - Install `ros-${ROS_DISTRO}-forward-command-controller` in the existing apt layer.
   - Build the complete image and confirm ROS resolves `forward_command_controller`.
-  - Current evidence: implemented in commit `ae6ff14`; image build and all 13 upstream xArm package builds passed. This remains unchecked pending user review.
+  - Evidence: implemented in commit `ae6ff14`; image build and all 13 upstream xArm package builds passed.
 
-- [ ] 2. Create a standalone bringup package outside `xarm_ros2`.
+- [x] 2. Create a standalone bringup package outside `xarm_ros2`.
   - Suggested package: `ros2_ws/src/xarm_gazebo_driver_bringup`.
   - Add package metadata, launch files, simulation controller YAML, and a wrapper Xacro.
   - Reuse installed resources from `xarm_description`, `xarm_gazebo`, and `xarm_moveit_config` without copying or editing the submodule.
 
-- [ ] 3. Define the Gazebo robot description and namespace boundaries.
+- [x] 3. Define the Gazebo robot description and namespace boundaries.
   - Instantiate the upstream `xarm_device` macro for xArm7 with `gazebo_ros2_control/GazeboSystem`.
   - Configure the Gazebo plugin explicitly with namespace `/sim`.
   - Set `robot_param_node` to `/sim/robot_state_publisher`.
   - Keep simulation robot description, joint-state topics, and TF separate from the global real-driver/MoveIt graph.
   - Ensure the simulated and real descriptions use identical joint names, prefix, attachments, and mounting pose.
 
-- [ ] 4. Configure the Gazebo controller manager.
+- [x] 4. Configure the Gazebo controller manager.
   - Configure `/sim/controller_manager` with `use_sim_time: true`.
   - Load `joint_state_broadcaster/JointStateBroadcaster` with `use_local_topics: true`.
   - Load `forward_command_controller/ForwardCommandController` for the position interfaces of `joint1` through `joint7`.
   - Use `/sim/joint_position_controller/commands` for targets.
   - Use `/sim/joint_state_broadcaster/joint_states` for measured feedback.
   - Do not load a Gazebo joint trajectory controller for this architecture.
+  - Evidence: `simulation_controllers.launch.py` activates both controllers in headless Gazebo using the upstream xArm7 model. Integration tests verify simulation time, exclusive position claims, measured feedback for two targets, and namespace isolation.
 
 - [ ] 5. Add an optional Gazebo backend to `xarm_controller_emulator`.
   - Preserve the current instantaneous backend for existing tests and use cases.
@@ -95,7 +97,11 @@ MoveIt
   - Verify a target is never reported as achieved before Gazebo reaches it.
   - Pause Gazebo during motion and verify feedback stops advancing and execution cannot falsely succeed.
   - Exercise C54, stop/enable recovery, stale-feedback recovery, emulator restart, and Gazebo restart.
+  - Inject C54 during MoveIt execution; verify the fault is reported, motion stops, and execution cannot falsely succeed.
+  - Verify clearing while the cause is active fails; releasing the cause alone leaves the error latched; clearing the error alone leaves motion disabled.
+  - Restore enable/mode/readiness explicitly and execute a fresh MoveIt goal; verify rejected or pre-fault targets do not replay.
   - Run existing emulator tests and the xArm ROS 2 driver/MoveIt integration tests.
+  - Partial evidence: the instantaneous backend passes the real-driver C54 injection/recovery test and normal/rich connection tests, plus MoveIt plan/execute. Repeat these with Gazebo feedback before checking this task.
 
 ## Scope note
 

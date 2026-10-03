@@ -15,6 +15,7 @@
   <exec_depend>xacro</exec_depend>
   <exec_depend>xarm_description</exec_depend>
   <exec_depend>gazebo_ros2_control</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>forward_command_controller</exec_depend>
 
@@ -25,6 +26,7 @@
   <test_depend>python3-pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
   <test_depend>rclpy</test_depend>
+  <test_depend>rcl_interfaces</test_depend>
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
   <test_depend>tf2_msgs</test_depend>

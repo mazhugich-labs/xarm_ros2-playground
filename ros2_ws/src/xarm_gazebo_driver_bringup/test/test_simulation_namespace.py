@@ -7,12 +7,13 @@ import socket
 import subprocess
 import time
 
-from controller_manager_msgs.srv import ListHardwareInterfaces
+from controller_manager_msgs.srv import ListControllers, ListHardwareInterfaces
 from gazebo_msgs.srv import SpawnEntity
+from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
-from std_msgs.msg import String
+from std_msgs.msg import Float64MultiArray, String
 from tf2_msgs.msg import TFMessage
 import yaml
 
@@ -73,8 +74,12 @@ def test_gazebo_namespace_and_description_source(tmp_path):
     node.create_subscription(String, '/robot_description', global_descriptions.append, latched)
     node.create_subscription(TFMessage, '/sim/tf', transforms.append, 10)
     node.create_subscription(TFMessage, '/sim/tf_static', static_transforms.append, latched)
-    feedback = node.create_publisher(
-        JointState, '/sim/joint_state_broadcaster/joint_states', 10,
+    samples = []
+    node.create_subscription(
+        JointState, '/sim/joint_state_broadcaster/joint_states', samples.append, 10,
+    )
+    commands_pub = node.create_publisher(
+        Float64MultiArray, '/sim/joint_position_controller/commands', 10,
     )
     try:
         with ExitStack() as stack:
@@ -121,13 +126,48 @@ def test_gazebo_namespace_and_description_source(tmp_path):
                 node.get_service_names_and_types()
             )
 
-            # Synthetic feedback tests description/TF routing, not physics or control.
-            wait_for(node, lambda: feedback.get_subscription_count() == 1, processes)
-            state = JointState()
-            state.header.stamp.sec = 1
-            state.name = [f'joint{i}' for i in range(1, 8)]
-            state.position = [0.0] * 7
-            feedback.publish(state)
+            spawner = stack.enter_context(child_process(
+                ['ros2', 'launch', 'xarm_gazebo_driver_bringup',
+                 'simulation_controllers.launch.py'], tmp_path / 'process_spawner.log', env,
+            ))
+            wait_for(node, lambda: spawner.poll() is not None, processes)
+            assert spawner.returncode == 0
+            controllers = node.create_client(
+                ListControllers, '/sim/controller_manager/list_controllers',
+            )
+            wait_for(node, controllers.service_is_ready, processes)
+            result = controllers.call_async(ListControllers.Request())
+            wait_for(node, result.done, processes)
+            loaded = {item.name: item for item in result.result().controller}
+            assert set(loaded) == {'joint_state_broadcaster', 'joint_position_controller'}
+            assert all(item.state == 'active' for item in loaded.values())
+            assert set(loaded['joint_position_controller'].claimed_interfaces) == {
+                f'joint{i}/position' for i in range(1, 8)
+            }
+            assert not loaded['joint_state_broadcaster'].claimed_interfaces
+
+            parameters = node.create_client(
+                GetParameters, '/sim/controller_manager/get_parameters',
+            )
+            wait_for(node, parameters.service_is_ready, processes)
+            result = parameters.call_async(GetParameters.Request(names=['use_sim_time']))
+            wait_for(node, result.done, processes)
+            assert result.result().values[0].bool_value
+            wait_for(node, lambda: len(samples) >= 3, processes)
+            assert samples[-1].header.stamp != samples[0].header.stamp
+            wait_for(node, lambda: commands_pub.get_subscription_count() == 1, processes)
+            for target in ([0.1, -0.1, 0.05, 0.25, -0.05, 0.1, -0.1], [0.0] * 7):
+                samples.clear()
+                commands_pub.publish(Float64MultiArray(data=target))
+
+                def reached_target():
+                    if not samples:
+                        return False
+                    measured = dict(zip(samples[-1].name, samples[-1].position))
+                    return all(abs(measured.get(f'joint{i}', float('inf')) - value) < 0.005
+                               for i, value in enumerate(target, 1))
+
+                wait_for(node, reached_target, processes)
             wait_for(node, lambda: bool(transforms), processes)
             assert {tf.child_frame_id for msg in transforms for tf in msg.transforms} == {
                 f'link{i}' for i in range(1, 8)

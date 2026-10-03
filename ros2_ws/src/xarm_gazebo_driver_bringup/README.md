@@ -6,9 +6,9 @@ It reuses the installed `xarm_description` macros and meshes. The wrapper uses t
 upstream default mounting transform (world origin, no rotation), matching the
 default real-driver description.
 
-The package currently publishes the simulation description and TF only. Gazebo
-spawning, controller startup, the emulator feedback backend, and the combined
-MoveIt launch are subsequent tasks in the repository's
+The package provides separate launch files for the simulation description and
+controller activation. Gazebo spawning, the emulator feedback backend, and the
+combined MoveIt launch are subsequent tasks in the repository's
 `GAZEBO_REAL_DRIVER_TODO.md`.
 
 ## Build and inspect
@@ -29,6 +29,17 @@ publishes `/sim/robot_description`, `/sim/tf`, and `/sim/tf_static`, and consume
 `/sim/joint_state_broadcaster/joint_states`. Dynamic transforms require joint
 feedback; the launch itself does not generate joint states or a simulation clock.
 
+After spawning this description in Gazebo, activate its controllers with:
+
+```bash
+ros2 launch xarm_gazebo_driver_bringup simulation_controllers.launch.py
+```
+
+The spawner waits up to 30 seconds for `/sim/controller_manager`, then loads and
+activates the joint-state broadcaster and position forward controller. It exits
+after activation; both controllers remain in the Gazebo process. This launch
+does not spawn the robot or start the emulator.
+
 ## Description compatibility and namespace validation
 
 The current supported model is the upstream default xArm7: empty joint prefix,
@@ -44,6 +55,9 @@ A headless integration test spawns the robot in a private Gazebo world while a
 global description publisher also exists. It verifies that Gazebo obtains the
 simulation model, exposes its interfaces through `/sim/controller_manager`, and
 keeps simulation description and TF publishers out of global topics.
+It also activates both controllers, verifies their interface claims and
+simulation-time configuration, and sends two joint targets whose measured
+positions must arrive through the Gazebo joint-state broadcaster.
 
 After building and sourcing the overlay, run in an isolated container or an
 unused ROS domain (83 is an example):
@@ -54,10 +68,10 @@ ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 colcon test \
 colcon test-result --verbose
 ```
 
-The three pytest cases passed in the Humble Docker image, including spawning in
-Gazebo Classic 11. The TF routing check supplies synthetic joint feedback;
-controller activation, measured physics feedback, and MoveIt execution are
-validated in later tasks. Tests do not launch the real hardware driver.
+The three pytest cases passed in the Humble Docker image, including spawning,
+controller activation, and measured joint feedback in Gazebo Classic 11.
+These package tests do not launch the real hardware driver. Emulator-backed
+MoveIt execution and C54 recovery with Gazebo remain separate integration tasks.
 
 ## Resources for subsequent launch integration
 
