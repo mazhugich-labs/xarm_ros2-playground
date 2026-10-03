@@ -18,7 +18,7 @@ Inside the project Docker environment:
 source /opt/ros/humble/setup.bash
 source /opt/xarm_ros2_ws/install/setup.bash
 cd /opt/ros2_ws
-colcon build --packages-up-to xarm_gazebo_driver_bringup
+colcon build --symlink-install --packages-up-to xarm_gazebo_driver_bringup
 source install/setup.bash
 ros2 launch xarm_gazebo_driver_bringup simulation.launch.py gui:=false
 ```
@@ -118,6 +118,10 @@ The coordinated-launch tests repeat driver motion, C54 recovery, and pause/resum
 through the installed launch. They also check failed spawning, a startup deadline,
 occupied emulator TCP ports, and readiness timeout without feedback. Validation
 was headless; GUI rendering was not tested.
+
+Run launch tests with `--symlink-install` as above: installed script symlinks
+retain source permissions. The `scripts/wait_for_feedback` helper must be tracked
+as executable; a regular copy install can hide a missing source executable bit.
 
 ## Resources for subsequent launch integration
 

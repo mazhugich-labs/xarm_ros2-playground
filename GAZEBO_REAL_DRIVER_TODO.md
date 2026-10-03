@@ -86,6 +86,7 @@ MoveIt
   - Start the emulator Gazebo backend only after its ROS interfaces are available.
   - Make readiness observable so the real-driver launch is not started against incomplete simulation feedback.
   - Evidence: installed `simulation.launch.py` passes headless startup, real-driver motion/C54/pause recovery, failed-spawn, startup-deadline, busy-port, and feedback-timeout tests. Binding errors now fail emulator startup synchronously. GUI rendering has not been tested.
+  - Symlink-install regression: the readiness helper's source executable bit is required. After correcting it, all nine bringup pytest cases passed with `colcon build --symlink-install`; use this build mode for future launch validation.
 
 - [ ] 8. Connect the existing real MoveIt launch to the emulator.
   - Start the existing xArm7 real-move launch with `robot_ip:=127.0.0.1` after emulator readiness.
