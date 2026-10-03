@@ -69,6 +69,22 @@ def exchange(state, command, payload=b''):
         return receive_reply(client, command)
 
 
+@pytest.mark.parametrize('endpoint', ['control', 'normal', 'rich'])
+def test_tcp_startup_propagates_bind_failure(endpoint):
+    """A busy TCP port must fail startup, not only an unseen daemon thread."""
+    with socket.socket() as occupied:
+        occupied.bind(('127.0.0.1', 0))
+        occupied.listen(1)
+        port = occupied.getsockname()[1]
+        if endpoint == 'control':
+            server = ControlServer(RobotState(), port=port)
+        else:
+            builder = build_normal_report if endpoint == 'normal' else build_rich_report
+            server = ReportServer(RobotState(), port, builder, endpoint)
+        with pytest.raises(OSError):
+            server.start()
+
+
 def motion_payload(target=1.0):
     """Use the manual's little-endian float encoding."""
     return struct.pack('<10f', target, 0, 0, 0, 0, 0, 0, 0.5, 1, 0)

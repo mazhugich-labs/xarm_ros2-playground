@@ -6,12 +6,11 @@ It reuses the installed `xarm_description` macros and meshes. The wrapper uses t
 upstream default mounting transform (world origin, no rotation), matching the
 default real-driver description.
 
-The package provides separate launch files for the simulation description and
-controller activation. The emulator now supplies an optional Gazebo backend.
-Automatic Gazebo spawning and the combined MoveIt launch are subsequent tasks in the repository's
-`GAZEBO_REAL_DRIVER_TODO.md`.
+The package starts Gazebo, the robot, simulation controllers, and the emulator
+through one ordered launch. Combined MoveIt startup remains the next task in
+the repository's `GAZEBO_REAL_DRIVER_TODO.md`.
 
-## Build and inspect
+## Build and start the simulation
 
 Inside the project Docker environment:
 
@@ -21,10 +20,49 @@ source /opt/xarm_ros2_ws/install/setup.bash
 cd /opt/ros2_ws
 colcon build --packages-up-to xarm_gazebo_driver_bringup
 source install/setup.bash
-ros2 launch xarm_gazebo_driver_bringup simulation_description.launch.py
+ros2 launch xarm_gazebo_driver_bringup simulation.launch.py gui:=false
 ```
 
-The launch creates `/sim/robot_state_publisher` with simulation time enabled. It
+Omit `gui:=false` to show Gazebo. The default world has a ground plane, zero
+gravity, and a nominal real-time factor of 1. The xArm is spawned at the world
+origin, preserving its description's mounting transform. No external models
+need downloading for this world.
+
+Startup advances on successful process exits: robot spawn, controller
+activation, then emulator startup. The emulator starts with `backend:=gazebo`.
+The launch prints `SIMULATION_READY` only after receiving fresh emulator
+feedback. `/xarm_controller_emulator/feedback_ready` continues to report feedback
+availability after startup. This signal does not mean motors are enabled or
+that C54 is clear; the driver still performs its normal readiness sequence.
+
+Arguments:
+
+| Argument | Default | Purpose |
+| --- | --- | --- |
+| `gui` | `true` | Show the Gazebo client. |
+| `world` | Packaged `worlds/xarm.world` | Choose a Gazebo Classic world file. |
+| `startup_timeout` | `60.0` seconds | Bound the entire startup sequence. |
+| `feedback_timeout` | `0.5` seconds | Emulator's stale-feedback threshold. |
+
+Failed spawning, controller activation, or emulator startup stops the launch.
+Occupied emulator TCP ports are startup errors. Gazebo server exit also shuts
+down the launch. Ctrl+C stops the launched processes. A later physics pause
+does not stop the launch: the emulator watchdog handles loss of feedback.
+
+The simulation launch does not start MoveIt or the real driver. A subsequent
+launcher can wait for current feedback using the installed readiness helper:
+
+```bash
+ros2 run xarm_gazebo_driver_bringup wait_for_feedback --timeout 30
+```
+
+It exits zero on fresh feedback and nonzero on timeout. Tests currently launch
+the real driver after readiness; combined MoveIt startup is step 8.
+
+## Individual components
+
+For manual composition, `simulation_description.launch.py` creates
+`/sim/robot_state_publisher` with simulation time enabled. It
 publishes `/sim/robot_description`, `/sim/tf`, and `/sim/tf_static`, and consumes
 `/sim/joint_state_broadcaster/joint_states`. Dynamic transforms require joint
 feedback; the launch itself does not generate joint states or a simulation clock.
@@ -47,7 +85,7 @@ no gripper or other attachments, and `world_joint` at `xyz="0 0 0"`, `rpy="0 0 0
 Link and joint names remain identical to the real-driver description; only the
 simulation ROS topics and nodes use `/sim`. Adding a prefix, tool, or non-default
 mounting pose requires updating both descriptions and the controller joint list
-together. A later spawn launch must preserve this mounting convention.
+together. The coordinated spawn launch uses this same mounting convention.
 
 The tests compare the expanded simulation and real-driver descriptions, including
 geometry, inertias, joint limits, mounting transform, and hardware interfaces.
@@ -68,7 +106,7 @@ ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 colcon test \
 colcon test-result --verbose
 ```
 
-The four pytest cases passed in the Humble Docker image, including spawning,
+The nine pytest cases passed in the Humble Docker image, including spawning,
 controller activation, and measured joint feedback in Gazebo Classic 11.
 The backend integration case also starts the TCP emulator with `backend:=gazebo`
 and the real `xarm_api` driver against loopback. It verifies ServoJ commands and
@@ -76,6 +114,10 @@ measured position queries, C54 latching/clearing/recovery, physics-pause watchdo
 behavior, and explicit recovery without replaying rejected targets. Run these
 tests in an isolated container: they own TCP ports 502, 30001, and 30002.
 MoveIt trajectory execution with Gazebo remains a separate integration task.
+The coordinated-launch tests repeat driver motion, C54 recovery, and pause/resume
+through the installed launch. They also check failed spawning, a startup deadline,
+occupied emulator TCP ports, and readiness timeout without feedback. Validation
+was headless; GUI rendering was not tested.
 
 ## Resources for subsequent launch integration
 

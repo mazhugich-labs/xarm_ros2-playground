@@ -194,16 +194,18 @@ def test_gazebo_namespace_and_description_source(tmp_path, with_emulator):
         rclpy.shutdown()
 
 
-def verify_emulator_and_driver(node, processes, stack, tmp_path, env, samples):
+def verify_emulator_and_driver(node, processes, stack, tmp_path, env, samples,
+                               start_emulator=True):
     """Run real driver commands, C54 recovery, and a paused-physics watchdog."""
     readiness, reports = [], []
     node.create_subscription(Bool, '/xarm_controller_emulator/feedback_ready',
                              readiness.append, 1)
     node.create_subscription(RobotMsg, '/xarm/robot_states', reports.append, 10)
-    processes.append(stack.enter_context(child_process(
-        ['ros2', 'run', 'xarm_controller_emulator', 'xarm_controller_emulator',
-         '--ros-args', '-p', 'backend:=gazebo'], tmp_path / 'process_emulator.log', env,
-    )))
+    if start_emulator:
+        processes.append(stack.enter_context(child_process(
+            ['ros2', 'run', 'xarm_controller_emulator', 'xarm_controller_emulator',
+             '--ros-args', '-p', 'backend:=gazebo'], tmp_path / 'process_emulator.log', env,
+        )))
     wait_for(node, lambda: readiness and readiness[-1].data, processes)
     processes.append(stack.enter_context(child_process(
         ['ros2', 'launch', 'xarm_api', 'xarm7_driver.launch.py',

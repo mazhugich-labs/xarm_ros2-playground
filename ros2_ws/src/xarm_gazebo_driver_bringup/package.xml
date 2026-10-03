@@ -18,22 +18,22 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>forward_command_controller</exec_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>xarm_controller_emulator</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>controller_manager_msgs</test_depend>
-  <test_depend>gazebo_ros</test_depend>
   <test_depend>gazebo_msgs</test_depend>
   <test_depend>python3-pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
-  <test_depend>rclpy</test_depend>
   <test_depend>rcl_interfaces</test_depend>
   <test_depend>sensor_msgs</test_depend>
-  <test_depend>std_msgs</test_depend>
   <test_depend>tf2_msgs</test_depend>
   <test_depend>std_srvs</test_depend>
   <test_depend>xarm_api</test_depend>
   <test_depend>xarm_msgs</test_depend>
-  <test_depend>xarm_controller_emulator</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

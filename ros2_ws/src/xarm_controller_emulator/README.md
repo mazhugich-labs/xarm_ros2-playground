@@ -4,6 +4,8 @@ A small ROS 2 emulator for the xArm private Modbus-TCP protocol. It listens on
 loopback: control on port 502, normal reports on 30001, and rich reports on 30002.
 Normal and rich reports run at 5 Hz. Port 502 may require permission to bind a
 privileged port (the project's Docker environment runs the emulator as root).
+All three endpoints bind before the ROS event loop starts; a port conflict fails
+the process instead of leaving an apparently ready emulator with a dead server.
 
 The wire format follows the [xArm Developer Manual V2.0.1, section 2.1](https://www.ufactory.cc/wp-content/uploads/2026/04/xArm-Developer-Manual-V2.0.1.pdf):
 header/report integers are big-endian and float32 fields are little-endian.
@@ -44,6 +46,10 @@ After spawning the unprefixed xArm7 model and activating the controllers from
 ros2 run xarm_controller_emulator xarm_controller_emulator \
   --ros-args -p backend:=gazebo -p feedback_timeout:=0.5
 ```
+
+Alternatively, `ros2 launch xarm_gazebo_driver_bringup simulation.launch.py`
+starts Gazebo, the robot, controllers, and this backend in order, with a feedback
+readiness gate. Do not start a second emulator alongside that launch.
 
 The backend streams ServoJ targets to `/sim/joint_position_controller/commands`
 and consumes `/sim/joint_state_broadcaster/joint_states`. It maps feedback by joint

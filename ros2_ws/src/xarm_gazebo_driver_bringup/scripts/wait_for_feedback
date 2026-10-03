@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Exit successfully only after receiving the emulator's feedback-ready signal."""
+
+import argparse
+import math
+import time
+
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.utilities import remove_ros_args
+from std_msgs.msg import Bool
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--timeout', type=float, default=30.0)
+    args = parser.parse_args(remove_ros_args()[1:])
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error('--timeout must be finite and positive')
+    rclpy.init()
+    node = rclpy.create_node('wait_for_emulator_feedback')
+    ready = False
+
+    def receive(message):
+        nonlocal ready
+        ready = message.data
+
+    node.create_subscription(Bool, '/xarm_controller_emulator/feedback_ready', receive, 1)
+    deadline = time.monotonic() + args.timeout
+    try:
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            if ready:
+                node.get_logger().info('Gazebo feedback is ready')
+                return 0
+        node.get_logger().error('Timed out waiting for fresh emulator feedback')
+        return 1
+    except (KeyboardInterrupt, ExternalShutdownException):
+        return 1
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
