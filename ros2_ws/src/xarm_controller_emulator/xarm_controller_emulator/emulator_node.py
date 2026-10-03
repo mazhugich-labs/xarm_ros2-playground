@@ -3,6 +3,8 @@
 from rclpy.node import Node
 from std_srvs.srv import SetBool
 
+from .gazebo_backend import GazeboBackend
+
 
 class XArmEmulatorNode(Node):
     """Expose the simulated C54 condition through a private ROS service."""
@@ -11,6 +13,12 @@ class XArmEmulatorNode(Node):
         """Bind the ROS interface to the shared controller state."""
         super().__init__('xarm_controller_emulator')
         self.state = state
+        backend = self.declare_parameter('backend', 'instantaneous').value
+        feedback_timeout = self.declare_parameter('feedback_timeout', 0.5).value
+        if backend not in ('instantaneous', 'gazebo'):
+            raise ValueError('backend must be instantaneous or gazebo')
+        self.backend = (
+            GazeboBackend(self, state, feedback_timeout) if backend == 'gazebo' else None)
         self.create_service(SetBool, '~/set_c54', self._set_c54)
         self.get_logger().info('xArm emulator ROS interface ready')
 

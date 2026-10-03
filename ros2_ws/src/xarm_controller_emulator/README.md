@@ -17,7 +17,8 @@ request bit (`0x08`). Invalid protocol IDs and empty frames close the connection
 
 ## Motion and recovery
 
-The initial controller is enabled and idle (reported state 2), in position mode.
+With the default `instantaneous` backend, the initial controller is enabled and
+idle (reported state 2), in position mode.
 Only modes 0 (position), 1 (ServoJ), and 2 (joint teaching) are accepted. Joint
 motion requires mode 0; ServoJ requires mode 1. Both require enabled motors,
 readiness, and no active controller error. Warnings do not block motion.
@@ -31,12 +32,47 @@ emulator never changes joint positions in response to motion commands.
 latches error 54, stops motion, clears commands, and returns to mode 0. Setting
 it false releases the condition but leaves the error latched. Recovery requires
 releasing the condition, `CLEAN_ERR`, enabling motors if needed, then
-`SET_STATE(0)`. This C54 latch policy is an emulator convention, not a hardware
+restoring the intended mode and `SET_STATE(0)`. This C54 latch policy is an emulator convention, not a hardware
 behavior verified by the cited manual.
+
+## Gazebo feedback backend
+
+After spawning the unprefixed xArm7 model and activating the controllers from
+`xarm_gazebo_driver_bringup`, start:
+
+```bash
+ros2 run xarm_controller_emulator xarm_controller_emulator \
+  --ros-args -p backend:=gazebo -p feedback_timeout:=0.5
+```
+
+The backend streams ServoJ targets to `/sim/joint_position_controller/commands`
+and consumes `/sim/joint_state_broadcaster/joint_states`. It maps feedback by joint
+name, validates complete finite measurements, and uses measured positions for
+both joint queries and TCP reports. Accepting a command never changes measured
+positions. `MOVE_JOINT` is rejected in this backend because no joint trajectory
+planner is implemented. The default instantaneous backend is unchanged.
+
+The emulator starts stopped and publishes `~/feedback_ready` (`std_msgs/msg/Bool`).
+Wait for true before starting the real driver, which must still set mode and
+readiness. This topic indicates fresh feedback, not motor readiness or absence
+of C54. No joint targets are published before the first valid measurement.
+
+Feedback freshness uses monotonic receipt time and requires advancing joint-state
+timestamps. Repeated timestamps do not keep the backend ready. A steady-clock
+watchdog remains active while Gazebo is paused. Missing feedback stops the
+controller (state 4, mode 0), discards targets, and holds the last measurement;
+it does not invent a manufacturer error code. Fresh feedback alone does not
+restore motion. Restore ServoJ mode and readiness explicitly after resuming
+Gazebo. A backwards simulation timestamp also stops motion and discards targets.
+Stop, pause, disable, mode changes, and C54 similarly replace targets with a hold.
+
+This backend currently supports the bringup package's fixed seven-joint, empty
+prefix configuration. The controller path remains on wall time; feedback stamps
+are used only to detect simulation progress and resets, not compared to wall time.
 
 ## Intentional limits
 
-- Motion completes immediately. There is no trajectory planner, timing, queue,
+- With the instantaneous backend, motion completes immediately. There is no trajectory planner, timing, queue,
   collision detection, or joint-limit validation. The completed `MOVE_JOINT`
   response includes a command-buffer count of zero.
 - Nonzero `only_check_type` is rejected without moving: this emulator cannot
@@ -69,7 +105,9 @@ The opt-in suite launches `xarm_api/xarm7_driver.launch.py` with both normal and
 rich reporting, then `xarm_moveit_config/xarm7_moveit_realmove.launch.py` with
 RViz disabled. It verifies SDK protocol switching, repeated driver service
 calls, joint-state reports, an active trajectory controller, and two successful
-MoveGroup plan-and-execute goals (joint 1 to 0.15 rad and back). Execution uses
+MoveGroup plan-and-execute goals (joint 1 to 0.15 rad and back). It also injects
+C54 through ROS and verifies blocked motion, fault latching, explicit recovery,
+and successful fresh commands. Execution uses
 `UFRobotSystemHardware` and the emulator TCP sockets, not fake hardware.
 
 Run in an isolated container so tests can own ports 502/30001/30002 and the ROS
@@ -92,3 +130,9 @@ isolated, sourced environment, use
 `XARM_ROS2_INTEGRATION=1 python3 -m pytest -q integration/test_xarm_ros2.py`.
 Failure output includes the launched processes' logs; pytest's temporary
 directory also retains each emulator, driver, and MoveIt log.
+
+The `xarm_gazebo_driver_bringup` test suite separately runs the Gazebo backend
+against the real `xarm_api` driver and upstream robot model. It checks measured
+joint feedback, C54 injection/recovery, and stopped motion during a physics
+pause, followed by explicit recovery without replaying rejected targets.
+MoveIt trajectory execution with Gazebo remains a later integration step.

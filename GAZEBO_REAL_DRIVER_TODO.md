@@ -61,7 +61,7 @@ MoveIt
   - Do not load a Gazebo joint trajectory controller for this architecture.
   - Evidence: `simulation_controllers.launch.py` activates both controllers in headless Gazebo using the upstream xArm7 model. Integration tests verify simulation time, exclusive position claims, measured feedback for two targets, and namespace isolation.
 
-- [ ] 5. Add an optional Gazebo backend to `xarm_controller_emulator`.
+- [x] 5. Add an optional Gazebo backend to `xarm_controller_emulator`.
   - Preserve the current instantaneous backend for existing tests and use cases.
   - Store commanded targets separately from measured robot state.
   - Publish accepted ServoJ targets to the Gazebo forward controller.
@@ -69,13 +69,15 @@ MoveIt
   - Source `GET_JOINT_POS` responses and normal/rich TCP reports exclusively from measured Gazebo positions.
   - Do not wait synchronously for Gazebo while holding TCP or robot-state locks.
   - Initially reject or explicitly leave unsupported any motion command whose Gazebo behavior has not been defined; real ros2_control writes require ServoJ first.
+  - Evidence: backend unit tests verify measured TCP queries/reports, input validation, and unsupported MOVE_JOINT. Headless Gazebo integration executes ServoJ through the actual `xarm_api` driver and compares TCP reads with Gazebo feedback.
 
-- [ ] 6. Define readiness, stale-feedback, stop, and fault behavior.
+- [x] 6. Define readiness, stale-feedback, stop, and fault behavior.
   - Do not report the emulator ready until one complete valid Gazebo joint-state sample has arrived.
   - Measure feedback age with a monotonic receive clock rather than comparing ROS wall time with simulation time.
   - Treat paused or lost Gazebo feedback as stale and prevent false trajectory success.
   - On stop, disable, C54, or stale feedback, hold the latest measured position and prevent queued targets from resuming on recovery.
   - Do not use command silence as the feedback watchdog: the xArm hardware plugin may omit repeated unchanged targets.
+  - Evidence: unit tests cover stop/disable/mode changes, repeated timestamps, stale feedback on all wire paths, and backwards simulation time. The real-driver/Gazebo test injects C54, rejects premature clearing and motion, restores readiness, and validates pause/resume watchdog recovery. Full process-restart and in-flight MoveIt fault tests remain under step 9.
 
 - [ ] 7. Add one launch path that starts the simulation side in dependency order.
   - Start Gazebo Classic and `/sim/robot_state_publisher`.
@@ -102,6 +104,7 @@ MoveIt
   - Restore enable/mode/readiness explicitly and execute a fresh MoveIt goal; verify rejected or pre-fault targets do not replay.
   - Run existing emulator tests and the xArm ROS 2 driver/MoveIt integration tests.
   - Partial evidence: the instantaneous backend passes the real-driver C54 injection/recovery test and normal/rich connection tests, plus MoveIt plan/execute. Repeat these with Gazebo feedback before checking this task.
+  - Latest validation: 84 emulator/driver pytest cases passed (one existing copyright skip), and four bringup pytest cases passed. Gazebo-backed driver commands, C54 recovery, and physics-pause recovery are covered; Gazebo-backed MoveIt execution and process restarts remain outstanding.
 
 ## Scope note
 

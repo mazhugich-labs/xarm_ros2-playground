@@ -1,7 +1,8 @@
-"""Shared controller state for the instantaneous-motion emulator."""
+"""Shared measured state and command targets for the controller emulator."""
 
 from dataclasses import dataclass, field
 from threading import RLock
+import time
 
 
 @dataclass
@@ -14,6 +15,10 @@ class RobotState:
     mode: int = 0
     cmdnum: int = 0
     joint_angles: list[float] = field(default_factory=lambda: [0.0] * 7)
+    joint_targets: list[float] = field(default_factory=lambda: [0.0] * 7)
+    external_feedback: bool = False
+    feedback_timeout: float = 0.5
+    feedback_received_at: float | None = None
     tcp_pose: list[float] = field(default_factory=lambda: [0.0] * 6)
     joint_torques: list[float] = field(default_factory=lambda: [0.0] * 7)
     error_code: int = 0
@@ -32,6 +37,9 @@ class RobotState:
             raise ValueError('dof must be 5, 6 or 7')
         self.servo_brake &= self.joint_mask
         self.servo_enable &= self.joint_mask
+        self.hold()
+        if self.external_feedback:
+            self.state = 4
 
     @property
     def joint_mask(self):
@@ -45,8 +53,29 @@ class RobotState:
             self.state in (1, 2)
             and not self.error_code
             and not self.c54_active
+            and self.feedback_fresh
             and self.servo_enable & self.joint_mask == self.joint_mask
         )
+
+    @property
+    def feedback_fresh(self):
+        """Check receipt age independently of ROS or simulation time."""
+        return not self.external_feedback or (
+            self.feedback_received_at is not None
+            and time.monotonic() - self.feedback_received_at < self.feedback_timeout
+        )
+
+    def hold(self):
+        """Discard any target in favor of measured position; caller holds the lock."""
+        self.joint_targets[:] = self.joint_angles
+
+    def check_feedback(self):
+        """Latch a stopped state on stale feedback; caller holds the lock."""
+        if not self.feedback_fresh:
+            self.state = 4
+            self.mode = 0
+            self.cmdnum = 0
+            self.hold()
 
     @property
     def response_status(self):
@@ -61,6 +90,7 @@ class RobotState:
         """Stop execution and discard queued commands; caller holds the lock."""
         self.state = 5
         self.cmdnum = 0
+        self.hold()
 
     def set_c54(self, active):
         """Latch a simulated C54; releasing its condition leaves the error set."""
@@ -71,3 +101,4 @@ class RobotState:
                 self.state = 4
                 self.mode = 0
                 self.cmdnum = 0
+                self.hold()

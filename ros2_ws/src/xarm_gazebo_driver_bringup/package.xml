@@ -30,6 +30,10 @@
   <test_depend>sensor_msgs</test_depend>
   <test_depend>std_msgs</test_depend>
   <test_depend>tf2_msgs</test_depend>
+  <test_depend>std_srvs</test_depend>
+  <test_depend>xarm_api</test_depend>
+  <test_depend>xarm_msgs</test_depend>
+  <test_depend>xarm_controller_emulator</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

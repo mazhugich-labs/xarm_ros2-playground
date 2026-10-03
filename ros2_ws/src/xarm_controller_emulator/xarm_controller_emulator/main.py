@@ -46,11 +46,12 @@ def main(args=None):
         name="rich",
     )
 
+    # Configure feedback readiness before any TCP endpoint accepts clients.
+    node = XArmEmulatorNode(state)
+
     control.start()
     normal_report.start()
     rich_report.start()
-
-    node = XArmEmulatorNode(state)
 
     try:
         rclpy.spin(node)

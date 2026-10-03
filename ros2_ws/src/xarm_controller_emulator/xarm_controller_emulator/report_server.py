@@ -31,6 +31,7 @@ def _fill_common_report(buf, state):
 def build_normal_report(state):
     """Take an atomic snapshot of the 145-byte normal report."""
     with state.lock:
+        state.check_feedback()
         buf = bytearray(NORMAL_REPORT_SIZE)
         _fill_common_report(buf, state)
         return bytes(buf)
@@ -39,6 +40,7 @@ def build_normal_report(state):
 def build_rich_report(state):
     """Take an atomic snapshot of the SDK-compatible 245-byte rich report."""
     with state.lock:
+        state.check_feedback()
         buf = bytearray(RICH_REPORT_SIZE)
         _fill_common_report(buf, state)
         struct.pack_into('6B', buf, 145, state.dof, state.dof, 0xAA, 0x55, 0, 0)

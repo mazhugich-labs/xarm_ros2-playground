@@ -7,8 +7,8 @@ upstream default mounting transform (world origin, no rotation), matching the
 default real-driver description.
 
 The package provides separate launch files for the simulation description and
-controller activation. Gazebo spawning, the emulator feedback backend, and the
-combined MoveIt launch are subsequent tasks in the repository's
+controller activation. The emulator now supplies an optional Gazebo backend.
+Automatic Gazebo spawning and the combined MoveIt launch are subsequent tasks in the repository's
 `GAZEBO_REAL_DRIVER_TODO.md`.
 
 ## Build and inspect
@@ -19,7 +19,7 @@ Inside the project Docker environment:
 source /opt/ros/humble/setup.bash
 source /opt/xarm_ros2_ws/install/setup.bash
 cd /opt/ros2_ws
-colcon build --packages-select xarm_gazebo_driver_bringup
+colcon build --packages-up-to xarm_gazebo_driver_bringup
 source install/setup.bash
 ros2 launch xarm_gazebo_driver_bringup simulation_description.launch.py
 ```
@@ -68,10 +68,14 @@ ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 colcon test \
 colcon test-result --verbose
 ```
 
-The three pytest cases passed in the Humble Docker image, including spawning,
+The four pytest cases passed in the Humble Docker image, including spawning,
 controller activation, and measured joint feedback in Gazebo Classic 11.
-These package tests do not launch the real hardware driver. Emulator-backed
-MoveIt execution and C54 recovery with Gazebo remain separate integration tasks.
+The backend integration case also starts the TCP emulator with `backend:=gazebo`
+and the real `xarm_api` driver against loopback. It verifies ServoJ commands and
+measured position queries, C54 latching/clearing/recovery, physics-pause watchdog
+behavior, and explicit recovery without replaying rejected targets. Run these
+tests in an isolated container: they own TCP ports 502, 30001, and 30002.
+MoveIt trajectory execution with Gazebo remains a separate integration task.
 
 ## Resources for subsequent launch integration
 
