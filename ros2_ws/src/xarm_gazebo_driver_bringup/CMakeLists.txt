@@ -19,7 +19,7 @@ if(BUILD_TESTING)
     TIMEOUT 180
   )
   ament_add_pytest_test(moveit_bringup test/test_moveit_bringup.py
-    TIMEOUT 180
+    TIMEOUT 300
   )
 endif()
 

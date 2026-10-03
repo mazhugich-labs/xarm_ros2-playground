@@ -111,6 +111,32 @@ The driver reactivates its trajectory controller once ready. Submit a fresh
 MoveIt goal; the interrupted trajectory is not resumed. These are emulator fault
 injection semantics, not instructions for diagnosing C54 on physical hardware.
 
+### Pauses, stops, and process restarts
+
+To pause and resume physics:
+
+```bash
+ros2 service call /pause_physics std_srvs/srv/Empty '{}'
+ros2 service call /unpause_physics std_srvs/srv/Empty '{}'
+```
+
+After a pause exceeds the feedback timeout, wait for
+`/xarm_controller_emulator/feedback_ready` to become true again. Then run the
+`motion_enable`, `set_mode`, and `set_state` recovery calls above and send a fresh
+MoveIt goal. An explicit stop (`set_state` with `data: 4`) or motor disable
+(`motion_enable` with `id: 8, data: 0`) also interrupts execution and requires
+explicit recovery. Neither operation injects C54.
+
+If the emulator or Gazebo server process exits, the combined launch shuts down.
+Recovery is a full restart: wait for the launch to finish, then rerun
+`moveit.launch.py`. The upstream hardware plugin exits on TCP disconnect, so
+restarting only the emulator under an existing driver is not a supported recovery
+path. A full restart creates a new world at the initial joint positions and a
+new driver connection; previous goals are discarded. Submit a new goal after
+startup. Fault injection tests kill each component during motion, verify that
+the launched processes exit and TCP ports are released, then relaunch on the
+same ports and execute a fresh trajectory.
+
 ## Individual components
 
 For manual composition, `simulation_description.launch.py` creates
@@ -158,9 +184,20 @@ ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 colcon test \
 colcon test-result --verbose
 ```
 
-All 11 bringup pytest cases passed with a symlink build in the Humble Docker image,
-including spawning,
-controller activation, and measured joint feedback in Gazebo Classic 11.
+Run the existing emulator suite, including the actual xArm driver and MoveIt
+integration, in that same isolated environment:
+
+```bash
+ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 XARM_ROS2_INTEGRATION=1 \
+  python3 -m pytest -p no:cacheprovider src/xarm_controller_emulator/test \
+  src/xarm_controller_emulator/integration/test_xarm_ros2.py -q
+```
+
+All 17 bringup pytest cases passed with a symlink build in the Humble Docker image,
+including spawning, controller activation, and measured joint feedback in Gazebo
+Classic 11. The existing emulator/driver/MoveIt suite passed 87 cases with one
+existing copyright skip. `colcon test-result` counts the four CTest wrappers as
+well, so it reports 21 bringup tests.
 The backend integration case also starts the TCP emulator with `backend:=gazebo`
 and the real `xarm_api` driver against loopback. It verifies ServoJ commands and
 measured position queries, C54 latching/clearing/recovery, physics-pause watchdog
@@ -170,7 +207,10 @@ The combined-launch tests execute MoveIt trajectories through the real hardware
 plugin and compare Gazebo, driver, MoveIt, and TCP joint feedback. They verify
 startup ordering, controller-manager isolation, clock configuration, C54 during
 motion, explicit recovery, and a fresh successful goal without trajectory replay.
-Process restarts and pausing during MoveIt execution remain step 9 acceptance work.
+Additional cases pause physics during motion and near the end of a trajectory,
+stop or disable motors during execution, and restart after either emulator or
+Gazebo process failure. Successful execution requires measured Gazebo positions
+within the goal tolerance at completion; interrupted goals must not succeed.
 The coordinated-launch tests repeat driver motion, C54 recovery, and pause/resume
 through the installed launch. They also check failed spawning, a startup deadline,
 occupied emulator TCP ports, and readiness timeout without feedback. Validation

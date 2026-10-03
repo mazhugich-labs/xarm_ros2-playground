@@ -77,7 +77,7 @@ MoveIt
   - Treat paused or lost Gazebo feedback as stale and prevent false trajectory success.
   - On stop, disable, C54, or stale feedback, hold the latest measured position and prevent queued targets from resuming on recovery.
   - Do not use command silence as the feedback watchdog: the xArm hardware plugin may omit repeated unchanged targets.
-  - Evidence: unit tests cover stop/disable/mode changes, repeated timestamps, stale feedback on all wire paths, and backwards simulation time. The real-driver/Gazebo test injects C54, rejects premature clearing and motion, restores readiness, and validates pause/resume watchdog recovery. Full process-restart and in-flight MoveIt fault tests remain under step 9.
+  - Evidence: unit tests cover stop/disable/mode changes, repeated timestamps, stale feedback on all wire paths, and backwards simulation time. The real-driver/Gazebo test injects C54, rejects premature clearing and motion, restores readiness, and validates pause/resume watchdog recovery. Step 9 also validates process restarts and faults during MoveIt execution.
 
 - [x] 7. Add one launch path that starts the simulation side in dependency order.
   - Start Gazebo Classic and `/sim/robot_state_publisher`.
@@ -95,7 +95,7 @@ MoveIt
   - Run Gazebo near real time and make pause behavior explicit in emulator readiness/fault handling.
   - Evidence: `moveit.launch.py` starts the installed real-move launch only after fresh feedback. All 11 bringup pytest cases passed with a symlink build in the Humble image, including real MoveIt plan/execute, measured Gazebo/TCP/driver/MoveIt feedback, exactly two controller managers, clock configuration, and C54 interruption/recovery without trajectory replay. Validation was headless.
 
-- [ ] 9. Validate the complete command and feedback loop.
+- [x] 9. Validate the complete command and feedback loop.
   - Confirm exactly two controller managers: root real hardware and `/sim` Gazebo hardware.
   - Confirm controller states and claimed interfaces do not overlap.
   - Execute a small MoveIt trajectory and compare Gazebo state, emulator protocol state, driver joint state, and MoveIt execution result.
@@ -106,8 +106,10 @@ MoveIt
   - Verify clearing while the cause is active fails; releasing the cause alone leaves the error latched; clearing the error alone leaves motion disabled.
   - Restore enable/mode/readiness explicitly and execute a fresh MoveIt goal; verify rejected or pre-fault targets do not replay.
   - Run existing emulator tests and the xArm ROS 2 driver/MoveIt integration tests.
-  - Partial evidence: the instantaneous backend passes the real-driver C54 injection/recovery test and normal/rich connection tests, plus MoveIt plan/execute. Repeat these with Gazebo feedback before checking this task.
-  - Latest validation: the previous emulator/driver run passed 87 pytest cases (one existing copyright skip). The step 8 symlink-build run passed all 11 bringup pytest cases, including Gazebo-backed MoveIt execution and C54 during a trajectory, latched-error semantics, controller reactivation, and a fresh successful goal without replay. Gazebo-backed driver physics-pause recovery is covered; pausing during MoveIt execution and process restarts remain outstanding.
+  - Final validation (2026-10-03): symlink build succeeded in the Humble/Gazebo Classic Docker image. All 17 bringup pytest cases passed, including eight combined MoveIt cases. The existing emulator suite plus actual xArm driver/MoveIt integration passed 87 cases, with one existing copyright skip. Total: 104 passed, one skipped. `colcon test-result` reports 21 bringup tests because it also counts the four CTest wrappers.
+  - Acceptance evidence: both controller managers and their interface claims are checked independently. Successful MoveIt results require measured Gazebo position within the goal tolerance at completion, followed by matching driver, MoveIt, and TCP feedback. C54, stop, disable, and physics pauses during motion (including near the goal) interrupt execution without false success. Paused simulation stamps remain frozen. Explicit recovery reactivates the controller, holds the stopped position, and allows a fresh goal without replay.
+  - Restart behavior: killing either the emulator or Gazebo during motion shuts down the combined launch. Tests verify launched child processes exit, TCP ports are released, and a full relaunch on the same ROS domain and ports starts at the initial pose and executes a fresh goal. Restarting an individual component under the existing driver is not supported; the upstream hardware plugin exits on TCP disconnect.
+  - Limits: validation is headless and uses the packaged zero-gravity world, default xArm7, and position control. GUI rendering and physical dynamics are outside this acceptance result. `xarm_ros2` and its nested SDK remain unchanged.
 
 ## Scope note
 
