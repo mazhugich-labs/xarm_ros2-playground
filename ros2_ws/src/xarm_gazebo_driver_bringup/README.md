@@ -7,8 +7,8 @@ upstream default mounting transform (world origin, no rotation), matching the
 default real-driver description.
 
 The package starts Gazebo, the robot, simulation controllers, and the emulator
-through one ordered launch. Combined MoveIt startup remains the next task in
-the repository's `GAZEBO_REAL_DRIVER_TODO.md`.
+through one ordered launch. `moveit.launch.py` then starts the upstream real-driver
+MoveIt stack once fresh Gazebo feedback is available.
 
 ## Build and start the simulation
 
@@ -41,8 +41,10 @@ Arguments:
 | --- | --- | --- |
 | `gui` | `true` | Show the Gazebo client. |
 | `world` | Packaged `worlds/xarm.world` | Choose a Gazebo Classic world file. |
-| `startup_timeout` | `60.0` seconds | Bound the entire startup sequence. |
+| `startup_timeout` | `60.0` seconds | Bound simulation startup through emulator feedback readiness. |
 | `feedback_timeout` | `0.5` seconds | Emulator's stale-feedback threshold. |
+| `launch_moveit` | `false` | Start real-driver MoveIt after readiness; enabled by `moveit.launch.py`. |
+| `show_rviz` | `true` | Show RViz when MoveIt is enabled. |
 
 Failed spawning, controller activation, or emulator startup stops the launch.
 Occupied emulator TCP ports are startup errors. Gazebo server exit also shuts
@@ -56,8 +58,58 @@ launcher can wait for current feedback using the installed readiness helper:
 ros2 run xarm_gazebo_driver_bringup wait_for_feedback --timeout 30
 ```
 
-It exits zero on fresh feedback and nonzero on timeout. Tests currently launch
-the real driver after readiness; combined MoveIt startup is step 8.
+It exits zero on fresh feedback and nonzero on timeout.
+
+## Start Gazebo with real-driver MoveIt
+
+After building and sourcing the overlay above, start the combined launch instead
+of the simulation-only launch:
+
+```bash
+ros2 launch xarm_gazebo_driver_bringup moveit.launch.py
+```
+
+For headless operation:
+
+```bash
+ros2 launch xarm_gazebo_driver_bringup moveit.launch.py gui:=false show_rviz:=false
+```
+
+The launch includes the installed `xarm7_moveit_realmove.launch.py` with
+`robot_ip:=127.0.0.1`. Its `UFRobotSystemHardware` plugin owns the embedded driver
+and the root `xarm7_traj_controller`; no separate driver is needed. The robot
+configuration is the same unprefixed xArm7 without a gripper at the world origin.
+Do not run another simulation, driver, or MoveIt launch alongside it.
+
+MoveIt and the real controller manager use wall time. Gazebo's controller manager
+uses simulation time, with the packaged world running nominally at real time.
+Pausing physics beyond `feedback_timeout` makes the emulator stop accepting
+motion; resuming physics alone does not re-enable it. `SIMULATION_READY` reports
+simulation readiness, not completion of MoveIt's subsequent startup.
+
+### C54 injection and recovery in the emulator
+
+Inject C54 using the emulator service:
+
+```bash
+ros2 service call /xarm_controller_emulator/set_c54 std_srvs/srv/SetBool '{data: true}'
+```
+
+An active MoveIt execution fails and the real driver deactivates its trajectory
+controller. Clearing the error while the injected cause remains active fails.
+Release the cause, clear the latched error, and explicitly restore readiness:
+
+```bash
+ros2 service call /xarm_controller_emulator/set_c54 std_srvs/srv/SetBool '{data: false}'
+ros2 service call /xarm/clean_error xarm_msgs/srv/Call '{}'
+ros2 service call /xarm/motion_enable xarm_msgs/srv/SetInt16ById '{id: 8, data: 1}'
+ros2 service call /xarm/set_mode xarm_msgs/srv/SetInt16 '{data: 1}'
+ros2 service call /xarm/set_state xarm_msgs/srv/SetInt16 '{data: 0}'
+```
+
+The driver reactivates its trajectory controller once ready. Submit a fresh
+MoveIt goal; the interrupted trajectory is not resumed. These are emulator fault
+injection semantics, not instructions for diagnosing C54 on physical hardware.
 
 ## Individual components
 
@@ -106,14 +158,19 @@ ROS_DOMAIN_ID=83 ROS_LOCALHOST_ONLY=1 colcon test \
 colcon test-result --verbose
 ```
 
-The nine pytest cases passed in the Humble Docker image, including spawning,
+All 11 bringup pytest cases passed with a symlink build in the Humble Docker image,
+including spawning,
 controller activation, and measured joint feedback in Gazebo Classic 11.
 The backend integration case also starts the TCP emulator with `backend:=gazebo`
 and the real `xarm_api` driver against loopback. It verifies ServoJ commands and
 measured position queries, C54 latching/clearing/recovery, physics-pause watchdog
 behavior, and explicit recovery without replaying rejected targets. Run these
 tests in an isolated container: they own TCP ports 502, 30001, and 30002.
-MoveIt trajectory execution with Gazebo remains a separate integration task.
+The combined-launch tests execute MoveIt trajectories through the real hardware
+plugin and compare Gazebo, driver, MoveIt, and TCP joint feedback. They verify
+startup ordering, controller-manager isolation, clock configuration, C54 during
+motion, explicit recovery, and a fresh successful goal without trajectory replay.
+Process restarts and pausing during MoveIt execution remain step 9 acceptance work.
 The coordinated-launch tests repeat driver motion, C54 recovery, and pause/resume
 through the installed launch. They also check failed spawning, a startup deadline,
 occupied emulator TCP ports, and readiness timeout without feedback. Validation
@@ -123,7 +180,7 @@ Run launch tests with `--symlink-install` as above: installed script symlinks
 retain source permissions. The `scripts/wait_for_feedback` helper must be tracked
 as executable; a regular copy install can hide a missing source executable bit.
 
-## Resources for subsequent launch integration
+## Resources
 
 - `urdf/xarm7_sim.urdf.xacro`: upstream xArm7 model with `GazeboSystem` hardware
   and one explicitly namespaced Gazebo ros2_control plugin.
@@ -136,7 +193,7 @@ as executable; a regular copy install can hide a missing source executable bit.
 
 The Gazebo plugin creates its controller manager when the model is spawned.
 Publishing this description alone does not create or activate controllers.
-The root controller manager and MoveIt will belong to the real-driver stack.
+The root controller manager and MoveIt belong to the real-driver stack.
 The simulation configuration must not supply global joint states or a second
 trajectory controller.
 

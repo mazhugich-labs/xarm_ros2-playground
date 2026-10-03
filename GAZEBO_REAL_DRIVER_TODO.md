@@ -88,11 +88,12 @@ MoveIt
   - Evidence: installed `simulation.launch.py` passes headless startup, real-driver motion/C54/pause recovery, failed-spawn, startup-deadline, busy-port, and feedback-timeout tests. Binding errors now fail emulator startup synchronously. GUI rendering has not been tested.
   - Symlink-install regression: the readiness helper's source executable bit is required. After correcting it, all nine bringup pytest cases passed with `colcon build --symlink-install`; use this build mode for future launch validation.
 
-- [ ] 8. Connect the existing real MoveIt launch to the emulator.
+- [x] 8. Connect the existing real MoveIt launch to the emulator.
   - Start the existing xArm7 real-move launch with `robot_ip:=127.0.0.1` after emulator readiness.
   - Let the real hardware plugin initialize its embedded driver; do not launch another xArm driver.
   - Keep the real-driver and MoveIt stack on wall time for the first integration while Gazebo uses simulation time.
   - Run Gazebo near real time and make pause behavior explicit in emulator readiness/fault handling.
+  - Evidence: `moveit.launch.py` starts the installed real-move launch only after fresh feedback. All 11 bringup pytest cases passed with a symlink build in the Humble image, including real MoveIt plan/execute, measured Gazebo/TCP/driver/MoveIt feedback, exactly two controller managers, clock configuration, and C54 interruption/recovery without trajectory replay. Validation was headless.
 
 - [ ] 9. Validate the complete command and feedback loop.
   - Confirm exactly two controller managers: root real hardware and `/sim` Gazebo hardware.
@@ -106,7 +107,7 @@ MoveIt
   - Restore enable/mode/readiness explicitly and execute a fresh MoveIt goal; verify rejected or pre-fault targets do not replay.
   - Run existing emulator tests and the xArm ROS 2 driver/MoveIt integration tests.
   - Partial evidence: the instantaneous backend passes the real-driver C54 injection/recovery test and normal/rich connection tests, plus MoveIt plan/execute. Repeat these with Gazebo feedback before checking this task.
-  - Latest validation: 87 emulator/driver pytest cases passed (one existing copyright skip), and nine bringup pytest cases passed. Gazebo-backed driver commands, C54 recovery, physics-pause recovery, and coordinated startup are covered; Gazebo-backed MoveIt execution and process restarts remain outstanding.
+  - Latest validation: the previous emulator/driver run passed 87 pytest cases (one existing copyright skip). The step 8 symlink-build run passed all 11 bringup pytest cases, including Gazebo-backed MoveIt execution and C54 during a trajectory, latched-error semantics, controller reactivation, and a fresh successful goal without replay. Gazebo-backed driver physics-pause recovery is covered; pausing during MoveIt execution and process restarts remain outstanding.
 
 ## Scope note
 

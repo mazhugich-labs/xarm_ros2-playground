@@ -18,6 +18,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(simulation_bringup test/test_simulation_bringup.py
     TIMEOUT 180
   )
+  ament_add_pytest_test(moveit_bringup test/test_moveit_bringup.py
+    TIMEOUT 180
+  )
 endif()
 
 ament_package()

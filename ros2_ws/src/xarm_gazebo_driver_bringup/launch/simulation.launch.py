@@ -9,6 +9,7 @@ from launch.actions import (
     RegisterEventHandler, TimerAction,
 )
 from launch.event_handlers import OnProcessExit
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -57,6 +58,24 @@ def generate_launch_description():
         package='xarm_gazebo_driver_bringup', executable='wait_for_feedback',
         output='screen', arguments=['--timeout', timeout],
     )
+    moveit = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(str(
+            Path(get_package_share_directory('xarm_moveit_config'))
+            / 'launch/xarm7_moveit_realmove.launch.py')),
+        condition=IfCondition(LaunchConfiguration('launch_moveit')),
+        launch_arguments={
+            'robot_ip': '127.0.0.1',
+            'prefix': '',
+            'hw_ns': 'xarm',
+            'add_gripper': 'false',
+            'add_bio_gripper': 'false',
+            'add_vacuum_gripper': 'false',
+            'attach_to': 'world',
+            'attach_xyz': '0 0 0',
+            'attach_rpy': '0 0 0',
+            'show_rviz': LaunchConfiguration('show_rviz'),
+        }.items(),
+    )
 
     def after_success(stage, next_actions):
         def exited(event, context):
@@ -73,7 +92,8 @@ def generate_launch_description():
         if event.returncode != 0:
             raise RuntimeError('Emulator feedback readiness check failed')
         startup['ready'] = True
-        return [LogInfo(msg='SIMULATION_READY: fresh Gazebo feedback; emulator at 127.0.0.1')]
+        return [LogInfo(msg='SIMULATION_READY: fresh Gazebo feedback; emulator at 127.0.0.1'),
+                moveit]
 
     def emulator_exited(event, context):
         if not context.is_shutdown:
@@ -88,6 +108,8 @@ def generate_launch_description():
         DeclareLaunchArgument('world', default_value=str(share / 'worlds/xarm.world')),
         DeclareLaunchArgument('startup_timeout', default_value='60.0'),
         DeclareLaunchArgument('feedback_timeout', default_value='0.5'),
+        DeclareLaunchArgument('launch_moveit', default_value='false'),
+        DeclareLaunchArgument('show_rviz', default_value='true'),
         RegisterEventHandler(OnProcessExit(
             target_action=spawn, on_exit=after_success('Robot spawn', [controllers]))),
         RegisterEventHandler(OnProcessExit(
